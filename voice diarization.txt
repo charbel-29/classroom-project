@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+
+ 
+
+import os
+
+import re
+
+import sys
+
+import torch
+
+import tempfile
+
+import numpy as np
+
+#from matplotlib import pyplot as plt
+
+#from pyannote.core import Segment, notebook
+
+#from pyannote.core import SlidingWindowFeature
+
+from pyannote.audio.utils.signal import Peak
+
+from pyannote.audio.utils.signal import Binarize
+
+ 
+
+# redirect warnings to /dev/null
+
+null = os.open('/dev/null', os.O_WRONLY)
+
+os.dup2(null, 2)
+
+ 
+
+# speech activity detection model trained on AMI training set
+
+sad = torch.hub.load('pyannote/pyannote-audio:develop', 'sad_ami')
+
+# speaker change detection model trained on AMI training set
+
+scd = torch.hub.load('pyannote/pyannote-audio:develop', 'scd_ami')
+
+# overlapped speech detection model trained on AMI training set
+
+ovl = torch.hub.load('pyannote/pyannote-audio:develop', 'ovl_ami')
+
+# speaker embedding model trained on VoxCeleb1
+
+emb = torch.hub.load('pyannote/pyannote-audio:develop', 'emb_ami')
+
+ 
+
+# test on our file
+
+test_file = {'uri': 'filename', 'audio': sys.argv[1]}
+
+ 
+
+# obtain raw SAD scores (as `pyannote.core.SlidingWindowFeature` instance)
+
+sad_scores = sad(test_file)
+
+ 
+
+# binarize raw SAD scores
+
+# NOTE: both onset/offset values were tuned on AMI dataset.
+
+# you might need to use different values for better results.
+
+binarize = Binarize(offset=0.52, onset=0.52, log_scale=True,
+
+                    min_duration_off=0.1, min_duration_on=0.1)
+
+ 
+
+# speech regions (as `pyannote.core.Timeline` instance)
+
+speech = binarize.apply(sad_scores, dimension=1)
+
+ 
+
+# obtain raw SCD scores (as `pyannote.core.SlidingWindowFeature` instance)
+
+scd_scores = scd(test_file)
+
+ 
+
+# detect peaks and return speaker homogeneous segments
+
+# NOTE: both alpha/min_duration values were tuned on AMI dataset.
+
+# you might need to use different values for better results.
+
+peak = Peak(alpha=0.3, min_duration=0.2, log_scale=True)
+
+ 
+
+# speaker change point (as `pyannote.core.Timeline` instance)
+
+partition = peak.apply(scd_scores, dimension=1)
+
+ 
+
+# obtain raw OVL scores (as `pyannote.core.SlidingWindowFeature` instance)
+
+ovl_scores = ovl(test_file)
+
+ 
+
+# binarize raw OVL scores
+
+# NOTE: both onset/offset values were tuned on AMI dataset.
+
+# you might need to use different values for better results.
+
+binarize = Binarize(offset=0.9, onset=0.5, log_scale=True,
+
+                    min_duration_off=0.1, min_duration_on=0.1)
+
+ 
+
+# overlapped speech regions (as `pyannote.core.Timeline` instance)
+
+overlap = binarize.apply(ovl_scores, dimension=1)
+
+ 
+
+# clear destination directory
+
+for counter,segment in enumerate(partition.segments_list_):
+
+    timestamps = re.sub(r'[\[\] ]', '', str(segment)).split('-->')
+
+    # cut samples
+
+    os.system(f"ffmpeg -i {sys.argv[1]} -ss {timestamps[0]} -to {timestamps[1]} -acodec copy ./diarized_samples/{counter}.wav -y")
+
+ 
